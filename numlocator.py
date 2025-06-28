@@ -17,7 +17,7 @@ service_provider = phonenumbers.parse(number)
 print("Carrier:", carrier.name_for_number(service_provider, "en"))
 
 # OpenCage API setup
-key = "your key here"  # Replace with your actual API key
+key = "Your key here"  # Replace with your actual API key
 geocoder = OpenCageGeocode(key)
 query = str(location)
 results = geocoder.geocode(query)

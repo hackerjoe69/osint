@@ -1,1 +1,1 @@
-number = "your phone number here with country code"
+number = "your number here with country code"  # Replace with the actual phone number
