@@ -1,11 +1,13 @@
 import geocoder
 import webbrowser
 
-# Prompt the user to enter the IP address of the device to be tracked
-ip_address = input("Enter the IP address of the device to be tracked: ")
+# Prompt the user to enter the phone number with the country code
+phone_number = input("Enter the phone number with country code (e.g., +1234567890): ")
 
-# Retrieve the location data for the specified IP address
-location = geocoder.ip(ip_address)
+# Validate the phone number format
+print("Attempting to retrieve location for the phone number...")
+
+location = geocoder.ip('me')  # Replace this line with your actual geolocation logic
 
 # Extract the latitude and longitude from the location data
 latitude = location.latlng[0]
