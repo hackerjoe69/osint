@@ -1,0 +1,1 @@
+number = "your number here with country code"  # Replace with the actual phone number
