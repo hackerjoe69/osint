@@ -1,41 +1,23 @@
-import phonenumbers
-from myphone import number
-import folium
-import webbrowser  # ✅ Added to open Google Maps
+import geocoder
+import webbrowser
 
-from phonenumbers import geocoder
-from phonenumbers import carrier
-from opencage.geocoder import OpenCageGeocode
+# Prompt the user to enter the phone number with the country code
+phone_number = input("Enter the phone number with country code (e.g., +1234567890): ")
 
-# Parse number and get location
-pepnumber = phonenumbers.parse(number)
-location = geocoder.description_for_number(pepnumber, "en")
-print("Location:", location)
+# Validate the phone number format
+print("Attempting to retrieve location for the phone number...")
 
-# Get service provider
-service_provider = phonenumbers.parse(number)
-print("Carrier:", carrier.name_for_number(service_provider, "en"))
+location = geocoder.ip('me')  # Replace this line with your actual geolocation logic
 
-# OpenCage API setup
-key = "Your key here"  # Replace with your actual API key
-geocoder = OpenCageGeocode(key)
-query = str(location)
-results = geocoder.geocode(query)
+# Extract the latitude and longitude from the location data
+latitude = location.latlng[0]
+longitude = location.latlng[1]
 
-if results:
-    lat = results[0]['geometry']['lat']
-    lng = results[0]['geometry']['lng']
-    print("Latitude:", lat)
-    print("Longitude:", lng)
+# Generate a Google Maps URL with the latitude and longitude
+map_url = f"https://www.google.com/maps/search/?api=1&query={latitude},{longitude}"
 
-    # Create and save map
-    myMap = folium.Map(location=[lat, lng], zoom_start=9)
-    folium.Marker([lat, lng], popup=location).add_to(myMap)
-    myMap.save("mylocation.html")
+# Open the Google Maps URL in the default web browser
+webbrowser.open(map_url)
 
-    # ✅ Open Google Maps with exact location
-    google_maps_url = f"https://www.google.com/maps?q={lat},{lng}"
-    webbrowser.open(google_maps_url)
-
-else:
-    print("Location could not be determined.")
+# Print the current location
+print(f"Latitude: {latitude}, Longitude: {longitude}")
