@@ -58,6 +58,111 @@ def get_public_ip():
     
     raise Exception("All IP detection services failed")
 
+def check_vpn_status(ip_address, geo_data):
+    """Check if IP appears to be using VPN/Proxy"""
+    vpn_indicators = {
+        'is_vpn': False,
+        'confidence': 'Low',
+        'indicators': [],
+        'risk_score': 0
+    }
+    
+    try:
+        # Check ISP/Organization names for VPN keywords
+        isp = geo_data.get('isp', '').lower()
+        org = geo_data.get('org', '').lower()
+        
+        vpn_keywords = [
+            'vpn', 'proxy', 'virtual private', 'hosting', 'datacenter', 
+            'cloud', 'server', 'tunnel', 'anonymous', 'privacy',
+            'expressvpn', 'nordvpn', 'surfshark', 'cyberghost',
+            'purevpn', 'hotspot shield', 'windscribe', 'protonvpn'
+        ]
+        
+        # Check for VPN keywords in ISP/Org
+        for keyword in vpn_keywords:
+            if keyword in isp or keyword in org:
+                vpn_indicators['indicators'].append(f'VPN keyword "{keyword}" found in ISP/Organization')
+                vpn_indicators['risk_score'] += 20
+        
+        # Check for data center/hosting providers
+        datacenter_keywords = ['amazon', 'google', 'microsoft', 'digitalocean', 'linode', 'vultr', 'ovh']
+        for keyword in datacenter_keywords:
+            if keyword in isp or keyword in org:
+                vpn_indicators['indicators'].append(f'Data center provider "{keyword}" detected')
+                vpn_indicators['risk_score'] += 15
+        
+        # Check ASN (Autonomous System) patterns
+        as_info = geo_data.get('as', '').lower()
+        if any(word in as_info for word in ['hosting', 'datacenter', 'cloud', 'server']):
+            vpn_indicators['indicators'].append('Hosting/Datacenter ASN detected')
+            vpn_indicators['risk_score'] += 10
+        
+        # Additional VPN detection using ip-api.com fields
+        if geo_data.get('proxy', False):
+            vpn_indicators['indicators'].append('Proxy flag set by geolocation service')
+            vpn_indicators['risk_score'] += 30
+        
+        # Check for unusual location vs ISP mismatches (basic heuristic)
+        country = geo_data.get('country', '').lower()
+        country_code = geo_data.get('countryCode', '').lower()
+        
+        # Common VPN exit countries
+        common_vpn_countries = ['netherlands', 'switzerland', 'panama', 'romania', 'bulgaria']
+        if any(vpn_country in country for vpn_country in common_vpn_countries):
+            if any(word in isp for word in ['vpn', 'proxy', 'privacy']):
+                vpn_indicators['indicators'].append(f'Common VPN exit country: {country}')
+                vpn_indicators['risk_score'] += 10
+        
+        # Determine overall assessment
+        if vpn_indicators['risk_score'] >= 50:
+            vpn_indicators['is_vpn'] = True
+            vpn_indicators['confidence'] = 'High'
+        elif vpn_indicators['risk_score'] >= 30:
+            vpn_indicators['is_vpn'] = True
+            vpn_indicators['confidence'] = 'Medium'
+        elif vpn_indicators['risk_score'] >= 15:
+            vpn_indicators['is_vpn'] = True
+            vpn_indicators['confidence'] = 'Low'
+        
+        # Additional check using a secondary API for VPN detection
+        try:
+            vpn_check_url = f"https://vpnapi.io/api/{ip_address}?key=free"
+            vpn_response = requests.get(vpn_check_url, timeout=5)
+            if vpn_response.status_code == 200:
+                vpn_data = vpn_response.json()
+                if vpn_data.get('security', {}).get('vpn', False):
+                    vpn_indicators['indicators'].append('VPN detected by secondary service')
+                    vpn_indicators['risk_score'] += 25
+                    vpn_indicators['is_vpn'] = True
+                    if vpn_indicators['confidence'] == 'Low':
+                        vpn_indicators['confidence'] = 'Medium'
+                
+                if vpn_data.get('security', {}).get('proxy', False):
+                    vpn_indicators['indicators'].append('Proxy detected by secondary service')
+                    vpn_indicators['risk_score'] += 20
+                    vpn_indicators['is_vpn'] = True
+                
+                if vpn_data.get('security', {}).get('tor', False):
+                    vpn_indicators['indicators'].append('Tor network detected')
+                    vpn_indicators['risk_score'] += 30
+                    vpn_indicators['is_vpn'] = True
+                    vpn_indicators['confidence'] = 'High'
+        except:
+            # Fallback VPN check failed, continue with existing analysis
+            pass
+        
+        # Re-evaluate confidence after secondary check
+        if vpn_indicators['risk_score'] >= 60:
+            vpn_indicators['confidence'] = 'Very High'
+        elif vpn_indicators['risk_score'] >= 45:
+            vpn_indicators['confidence'] = 'High'
+        
+    except Exception as e:
+        vpn_indicators['indicators'].append(f'Error during VPN check: {str(e)}')
+    
+    return vpn_indicators
+
 def get_weather_description(code):
     """Convert WMO weather codes to descriptions"""
     weather_codes = {
@@ -115,6 +220,38 @@ def display_results(results):
             st.write(f"**Country:** {results['country']}")
             st.write(f"**ZIP Code:** {results['zip_code']}")
             st.write(f"**Coordinates:** {results['lat']:.4f}, {results['lon']:.4f}")
+        
+        # VPN/Proxy Status
+        if 'vpn_status' in results and results['vpn_status']:
+            st.subheader("🔒 VPN/Proxy Analysis")
+            vpn_info = results['vpn_status']
+            
+            # Color-coded status
+            if vpn_info['is_vpn']:
+                if vpn_info['confidence'] in ['Very High', 'High']:
+                    st.error(f"🚨 **VPN/Proxy Detected** (Confidence: {vpn_info['confidence']})")
+                elif vpn_info['confidence'] == 'Medium':
+                    st.warning(f"⚠️ **Likely VPN/Proxy** (Confidence: {vpn_info['confidence']})")
+                else:
+                    st.info(f"ℹ️ **Possible VPN/Proxy** (Confidence: {vpn_info['confidence']})")
+            else:
+                st.success("✅ **Direct Connection** - No VPN/Proxy detected")
+            
+            # Risk score
+            risk_color = "🔴" if vpn_info['risk_score'] >= 50 else "🟡" if vpn_info['risk_score'] >= 25 else "🟢"
+            st.write(f"**Risk Score:** {risk_color} {vpn_info['risk_score']}/100")
+            
+            # Show indicators if any found
+            if vpn_info['indicators']:
+                st.write("**Detection Indicators:**")
+                for indicator in vpn_info['indicators']:
+                    st.write(f"• {indicator}")
+            
+            # Additional info
+            if vpn_info['is_vpn']:
+                st.info("💡 **Note:** VPN/Proxy detection is based on various indicators and may not be 100% accurate.")
+        else:
+            st.info("⚠️ VPN status check not available")
         
         # Map
         st.subheader("🗺️ Location on Map")
@@ -286,8 +423,23 @@ if track_button:
                         'as_info': as_info,
                         'weather': None,
                         'webcams': [],
-                        'webcam_message': None
+                        'webcam_message': None,
+                        'vpn_status': None
                     }
+                    
+                    # VPN/Proxy Detection
+                    try:
+                        with st.spinner("Checking VPN/Proxy status..."):
+                            vpn_status = check_vpn_status(current_ip, geo_data)
+                            results['vpn_status'] = vpn_status
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not check VPN status: {e}")
+                        results['vpn_status'] = {
+                            'is_vpn': False,
+                            'confidence': 'Unknown',
+                            'indicators': [f'VPN check failed: {str(e)}'],
+                            'risk_score': 0
+                        }
                     
                     # Weather Information
                     try:
