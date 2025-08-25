@@ -1,8 +1,15 @@
+
 import streamlit as st
 import requests
 import folium
 from streamlit_folium import st_folium
 import json
+from ping3 import ping
+import time
+from datetime import datetime
+import pytz
+import speedtest
+import os
 
 # Configure page
 st.set_page_config(
@@ -13,6 +20,15 @@ st.set_page_config(
 
 # Title of the app
 st.title("🌍 IP Address Location Tracker")
+
+with st.sidebar:
+    st.title("ℹ️ About")
+    st.markdown("""
+    This application allows you to track the geographical location of an IP address, check for VPN/proxy usage, measure network performance, and view nearby webcams.""")
+    button = st.button("Get my location")
+
+    if button:
+        st.success("You can use the main input field to track your IP address.")
 
 def validate_ip_address(ip):
     """Basic IP address validation"""
@@ -46,14 +62,13 @@ def get_public_ip():
             response.raise_for_status()
             data = response.json()
             
-            # Different services return IP in different formats
             if 'origin' in data:  # httpbin
                 return data['origin']
             elif 'ip' in data:  # ipify
                 return data['ip']
             elif 'query' in data:  # ip-api
                 return data['query']
-        except Exception as e:
+        except Exception:
             continue
     
     raise Exception("All IP detection services failed")
@@ -69,18 +84,15 @@ def check_vpn_status(ip_address, geo_data):
     }
     
     try:
-        # Extract data for analysis
         isp = geo_data.get('isp', '').lower()
         org = geo_data.get('org', '').lower()
         as_info = geo_data.get('as', '').lower()
         country = geo_data.get('country', '').lower()
         
-        # Debug information
         vpn_indicators['debug_info'].append(f"ISP: {isp}")
         vpn_indicators['debug_info'].append(f"Organization: {org}")
         vpn_indicators['debug_info'].append(f"AS: {as_info}")
         
-        # Expanded VPN keywords
         vpn_keywords = [
             'vpn', 'proxy', 'virtual private', 'private network', 'tunnel', 'anonymous',
             'privacy', 'secure', 'shield', 'guard', 'protect', 'hide', 'mask',
@@ -91,7 +103,6 @@ def check_vpn_status(ip_address, geo_data):
             'fastestssh', 'ssh tunnel', 'openvpn', 'wireguard', 'strongvpn'
         ]
         
-        # Enhanced datacenter/hosting keywords
         datacenter_keywords = [
             'hosting', 'datacenter', 'data center', 'cloud', 'server', 'vps',
             'dedicated', 'colocation', 'colo', 'infrastructure', 'services',
@@ -101,7 +112,6 @@ def check_vpn_status(ip_address, geo_data):
             'bluehost', 'dreamhost', 'namecheap', 'hostinger'
         ]
         
-        # Check for VPN keywords in ISP/Org
         for keyword in vpn_keywords:
             if keyword in isp:
                 vpn_indicators['indicators'].append(f'VPN keyword "{keyword}" found in ISP: {geo_data.get("isp", "")}')
@@ -113,7 +123,6 @@ def check_vpn_status(ip_address, geo_data):
                 vpn_indicators['indicators'].append(f'VPN keyword "{keyword}" found in AS: {geo_data.get("as", "")}')
                 vpn_indicators['risk_score'] += 20
         
-        # Check for datacenter/hosting providers
         hosting_score = 0
         for keyword in datacenter_keywords:
             if keyword in isp:
@@ -127,14 +136,12 @@ def check_vpn_status(ip_address, geo_data):
                 hosting_score += 8
         
         if hosting_score > 0:
-            vpn_indicators['risk_score'] += min(hosting_score, 30)  # Cap hosting score
+            vpn_indicators['risk_score'] += min(hosting_score, 30)
         
-        # Check ip-api specific fields
         if geo_data.get('proxy', False):
             vpn_indicators['indicators'].append('Proxy flag detected by ip-api.com')
             vpn_indicators['risk_score'] += 40
         
-        # Check for mobile carrier vs datacenter mismatch
         mobile_keywords = ['mobile', 'cellular', 'wireless', 'telecom', 'communications']
         is_mobile_isp = any(keyword in isp for keyword in mobile_keywords)
         is_datacenter = any(keyword in isp for keyword in datacenter_keywords)
@@ -143,7 +150,6 @@ def check_vpn_status(ip_address, geo_data):
             vpn_indicators['indicators'].append(f'Datacenter ISP detected: {geo_data.get("isp", "")}')
             vpn_indicators['risk_score'] += 20
         
-        # Multiple VPN detection APIs
         vpn_apis = [
             {
                 'name': 'VPNAPI.io',
@@ -187,19 +193,15 @@ def check_vpn_status(ip_address, geo_data):
             except Exception as e:
                 vpn_indicators['debug_info'].append(f'{api["name"]} check failed: {str(e)}')
         
-        # Additional heuristics for common VPN patterns
-        
-        # Check for sequential IP patterns (common in VPN pools)
         ip_parts = ip_address.split('.')
         try:
             last_octet = int(ip_parts[3])
-            if last_octet in [1, 2, 3, 10, 50, 100]:  # Common VPN server IPs
+            if last_octet in [1, 2, 3, 10, 50, 100]:
                 vpn_indicators['indicators'].append(f'Common VPN server IP pattern detected')
                 vpn_indicators['risk_score'] += 5
         except:
             pass
         
-        # Check for common VPN exit countries with suspicious ISPs
         vpn_friendly_countries = [
             'netherlands', 'switzerland', 'panama', 'romania', 'bulgaria',
             'moldova', 'seychelles', 'british virgin islands', 'cayman islands'
@@ -210,16 +212,6 @@ def check_vpn_status(ip_address, geo_data):
                 vpn_indicators['indicators'].append(f'VPN-friendly country ({country}) with hosting ISP')
                 vpn_indicators['risk_score'] += 15
         
-        # Port scan detection (advanced heuristic)
-        try:
-            # Check if IP has common VPN ports open (this is a simplified check)
-            common_vpn_ports = [1194, 443, 80, 53]  # OpenVPN, HTTPS, HTTP, DNS
-            # Note: Actual port scanning would require additional libraries
-            # This is a placeholder for more advanced detection
-        except:
-            pass
-        
-        # Final risk assessment
         if vpn_indicators['risk_score'] >= 70:
             vpn_indicators['is_vpn'] = True
             vpn_indicators['confidence'] = 'Very High'
@@ -233,28 +225,100 @@ def check_vpn_status(ip_address, geo_data):
             vpn_indicators['is_vpn'] = True
             vpn_indicators['confidence'] = 'Low'
         
-        # If no indicators found, try one more aggressive check
-        if vpn_indicators['risk_score'] == 0:
-            # Check for any ISP that's not a traditional telecom provider
-            traditional_telecoms = [
-                'comcast', 'verizon', 'at&t', 'charter', 'cox', 'spectrum',
-                'british telecom', 'bt', 'virgin media', 'sky', 'orange',
-                'vodafone', 'telefonica', 'deutsche telekom', 't-mobile',
-                'sprint', 'rogers', 'bell canada', 'telus', 'shaw'
-            ]
-            
-            is_traditional = any(telecom in isp for telecom in traditional_telecoms)
-            if not is_traditional and isp:
-                vpn_indicators['indicators'].append(f'Non-traditional ISP detected: {geo_data.get("isp", "")}')
-                vpn_indicators['risk_score'] += 10
-                vpn_indicators['is_vpn'] = True
-                vpn_indicators['confidence'] = 'Low'
+        traditional_telecoms = [
+            'comcast', 'verizon', 'at&t', 'charter', 'cox', 'spectrum',
+            'british telecom', 'bt', 'virgin media', 'sky', 'orange',
+            'vodafone', 'telefonica', 'deutsche telekom', 't-mobile',
+            'sprint', 'rogers', 'bell canada', 'telus', 'shaw'
+        ]
+        
+        is_traditional = any(telecom in isp for telecom in traditional_telecoms)
+        if not is_traditional and isp:
+            vpn_indicators['indicators'].append(f'Non-traditional ISP detected: {geo_data.get("isp", "")}')
+            vpn_indicators['risk_score'] += 10
+            vpn_indicators['is_vpn'] = True
+            vpn_indicators['confidence'] = 'Low'
         
     except Exception as e:
         vpn_indicators['indicators'].append(f'Error during VPN check: {str(e)}')
         vpn_indicators['debug_info'].append(f'Exception: {str(e)}')
     
     return vpn_indicators
+
+def measure_latency(ip_address="8.8.8.8", count=3):
+    """Measure latency by pinging a server with fallback targets"""
+    ping_targets = [ip_address, "8.8.8.8", "1.1.1.1"]  # Primary, Google DNS, Cloudflare DNS
+    debug_info = []
+    
+    for target in ping_targets:
+        try:
+            # Check if we have permission to ping
+            if os.name == 'posix' and os.geteuid() != 0:
+                return {
+                    'avg_latency_ms': None,
+                    'min_latency_ms': None,
+                    'max_latency_ms': None,
+                    'success': False,
+                    'error': 'Permission denied: Run with sudo for ICMP ping on Unix-like systems',
+                    'debug_info': debug_info
+                }
+                
+            latencies = []
+            debug_info.append(f"Attempting to ping {target}")
+            for _ in range(count):
+                result = ping(target, timeout=2)
+                if result is not None:
+                    latencies.append(result * 1000)  # Convert to milliseconds
+                time.sleep(0.5)  # Small delay between pings
+            if latencies:
+                debug_info.append(f"Successful pings to {target}: {latencies}")
+                return {
+                    'avg_latency_ms': round(sum(latencies) / len(latencies), 2),
+                    'min_latency_ms': round(min(latencies), 2),
+                    'max_latency_ms': round(max(latencies), 2),
+                    'success': True,
+                    'error': None,
+                    'debug_info': debug_info
+                }
+            debug_info.append(f"No response from {target}")
+        except Exception as e:
+            debug_info.append(f"Ping to {target} failed: {str(e)}")
+            continue
+    
+    return {
+        'avg_latency_ms': None,
+        'min_latency_ms': None,
+        'max_latency_ms': None,
+        'success': False,
+        'error': 'No successful pings received from any target',
+        'debug_info': debug_info
+    }
+
+def measure_network_speed():
+    """Measure network speed using speedtest-cli"""
+    try:
+        stest = speedtest.Speedtest()
+        stest.get_best_server()
+        download = stest.download() / 1_000_000  # Convert to Mbps
+        upload = stest.upload() / 1_000_000  # Convert to Mbps
+        ping = stest.results.ping
+        return {
+            'download_speed': f"{download:.2f} Mbps",
+            'upload_speed': f"{upload:.2f} Mbps",
+            'ping': f"{ping:.2f} ms",
+            'success': True,
+            'error': None,
+            'debug_info': ['Speed test completed successfully']
+        }
+    except Exception as e:
+        return {
+            'download_speed': 'N/A',
+            'upload_speed': 'N/A',
+            'ping': 'N/A',
+            'success': False,
+            'error': f"Speed test failed: {str(e)}",
+            'debug_info': [f"Speed test error: {str(e)}"]
+        }
 
 def get_weather_description(code):
     """Convert WMO weather codes to descriptions"""
@@ -296,7 +360,6 @@ def display_results(results):
         return
     
     try:
-        # Display basic info in columns
         col1, col2 = st.columns(2)
         
         with col1:
@@ -314,12 +377,46 @@ def display_results(results):
             st.write(f"**ZIP Code:** {results['zip_code']}")
             st.write(f"**Coordinates:** {results['lat']:.4f}, {results['lon']:.4f}")
         
-        # VPN/Proxy Status
+        st.subheader("📡 Network Performance")
+        if 'network' in results and results['network']:
+            ncol1, ncol2 = st.columns(2)
+            with ncol1:
+                if (results['network'].get('latency') and 
+                    results['network']['latency'].get('success') and 
+                    results['network']['latency']['avg_latency_ms'] is not None):
+                    st.metric("🏓 Average Latency", f"{results['network']['latency']['avg_latency_ms']} ms")
+                    st.write(f"**Min Latency:** {results['network']['latency']['min_latency_ms']} ms")
+                    st.write(f"**Max Latency:** {results['network']['latency']['max_latency_ms']} ms")
+                else:
+                    error_msg = results['network']['latency'].get('error', 'Unknown error')
+                    st.warning(f"⚠️ Latency test failed: {error_msg}")
+            
+            with ncol2:
+                if results['network'].get('speed') and results['network']['speed'].get('success'):
+                    st.metric("⬇️ Download Speed", results['network']['speed']['download_speed'])
+                    st.metric("⬆️ Upload Speed", results['network']['speed']['upload_speed'])
+                    st.write(f"**Ping:** {results['network']['speed']['ping']}")
+                else:
+                    error_msg = results['network']['speed'].get('error', 'Unknown error')
+                    st.warning(f"⚠️ Speed test failed: {error_msg}")
+            
+            # Debug information for network tests
+            with st.expander("🔍 Network Test Debug Info", expanded=False):
+                if results['network']['latency'].get('debug_info'):
+                    st.write("**Latency Test Debug:**")
+                    for info in results['network']['latency']['debug_info']:
+                        st.write(f"• {info}")
+                if results['network']['speed'].get('debug_info'):
+                    st.write("**Speed Test Debug:**")
+                    for info in results['network']['speed']['debug_info']:
+                        st.write(f"• {info}")
+        else:
+            st.warning("⚠️ Network performance data not available")
+        
         if 'vpn_status' in results and results['vpn_status']:
             st.subheader("🔒 VPN/Proxy Analysis")
             vpn_info = results['vpn_status']
             
-            # Color-coded status
             if vpn_info['is_vpn']:
                 if vpn_info['confidence'] in ['Very High', 'High']:
                     st.error(f"🚨 **VPN/Proxy Detected** (Confidence: {vpn_info['confidence']})")
@@ -330,23 +427,19 @@ def display_results(results):
             else:
                 st.success("✅ **Direct Connection** - No VPN/Proxy detected")
             
-            # Risk score
             risk_color = "🔴" if vpn_info['risk_score'] >= 50 else "🟡" if vpn_info['risk_score'] >= 25 else "🟢"
             st.write(f"**Risk Score:** {risk_color} {vpn_info['risk_score']}/100")
             
-            # Show indicators if any found
             if vpn_info['indicators']:
                 st.write("**Detection Indicators:**")
                 for indicator in vpn_info['indicators']:
                     st.write(f"• {indicator}")
             
-            # Show debug information for troubleshooting
             if vpn_info.get('debug_info'):
                 with st.expander("🔧 Debug Information", expanded=False):
                     for debug_item in vpn_info['debug_info']:
                         st.write(f"• {debug_item}")
             
-            # Additional info
             if vpn_info['is_vpn']:
                 st.info("💡 **Note:** VPN/Proxy detection is based on various indicators and may not be 100% accurate.")
             else:
@@ -354,7 +447,6 @@ def display_results(results):
         else:
             st.info("⚠️ VPN status check not available")
         
-        # Map
         st.subheader("🗺️ Location on Map")
         try:
             m = folium.Map(location=[results['lat'], results['lon']], zoom_start=12, tiles="OpenStreetMap")
@@ -388,7 +480,6 @@ def display_results(results):
         except Exception as e:
             st.error(f"❌ Error creating map: {e}")
         
-        # Weather
         st.subheader("🌤️ Current Weather")
         if 'weather' in results and results['weather']:
             wcol1, wcol2, wcol3 = st.columns(3)
@@ -407,7 +498,6 @@ def display_results(results):
         else:
             st.warning("⚠️ Weather data not available")
         
-        # Webcams
         if 'webcams' in results and results['webcams']:
             st.subheader("📹 Nearby Webcams")
             st.success(f"Found {len(results['webcams'])} webcams within 50km")
@@ -427,7 +517,7 @@ def display_results(results):
             st.info(results['webcam_message'])
         
     except Exception as e:
-        st.error(f"❌ Error displaying results: {e}")
+        st.error(f"❌ Error displaying results: {str(e)}")
 
 # Initialize session state
 if 'tracking_results' not in st.session_state:
@@ -458,14 +548,11 @@ with button_col2:
 
 # Track location logic
 if track_button:
-    # Validate IP address format
     if ip_address and not validate_ip_address(ip_address):
         st.error("❌ Invalid IP address format. Please enter a valid IPv4 address.")
     else:
-        # Determine the IP to use
         current_ip = ip_address.strip()
         
-        # Get public IP if not provided
         if not current_ip:
             try:
                 with st.spinner("Getting your public IP address..."):
@@ -475,14 +562,12 @@ if track_button:
                 st.error(f"❌ Error fetching public IP: {e}")
                 st.stop()
 
-        # Check if we need to fetch new data
         need_new_data = (
             not st.session_state.tracking_results or 
             st.session_state.last_tracked_ip != current_ip
         )
         
         if need_new_data:
-            # Fetch new data
             try:
                 with st.spinner("Fetching location data..."):
                     geo_url = f"http://ip-api.com/json/{current_ip}"
@@ -494,7 +579,6 @@ if track_button:
                         st.error(f"❌ Error: {geo_data.get('message', 'Unknown error')}")
                         st.stop()
                     
-                    # Extract data with error handling
                     lat = geo_data.get('lat')
                     lon = geo_data.get('lon')
                     
@@ -510,7 +594,6 @@ if track_button:
                     org = geo_data.get('org', 'N/A')
                     as_info = geo_data.get('as', 'N/A')
                     
-                    # Prepare results dictionary
                     results = {
                         'ip_address': current_ip,
                         'lat': lat,
@@ -525,10 +608,10 @@ if track_button:
                         'weather': None,
                         'webcams': [],
                         'webcam_message': None,
-                        'vpn_status': None
+                        'vpn_status': None,
+                        'network': None
                     }
                     
-                    # VPN/Proxy Detection
                     try:
                         with st.spinner("Checking VPN/Proxy status..."):
                             vpn_status = check_vpn_status(current_ip, geo_data)
@@ -542,7 +625,35 @@ if track_button:
                             'risk_score': 0
                         }
                     
-                    # Weather Information
+                    try:
+                        with st.spinner("Measuring network performance..."):
+                            latency_result = measure_latency(current_ip if ip_address else "8.8.8.8")
+                            speed_result = measure_network_speed()
+                            results['network'] = {
+                                'latency': latency_result,
+                                'speed': speed_result
+                            }
+                    except Exception as e:
+                        st.warning(f"⚠️ Could not measure network performance: {e}")
+                        results['network'] = {
+                            'latency': {
+                                'avg_latency_ms': None,
+                                'min_latency_ms': None,
+                                'max_latency_ms': None,
+                                'success': False,
+                                'error': str(e),
+                                'debug_info': [f"Network performance error: {str(e)}"]
+                            },
+                            'speed': {
+                                'download_speed': 'N/A',
+                                'upload_speed': 'N/A',
+                                'ping': 'N/A',
+                                'success': False,
+                                'error': str(e),
+                                'debug_info': [f"Network performance error: {str(e)}"]
+                            }
+                        }
+                    
                     try:
                         with st.spinner("Fetching weather data..."):
                             weather_url = f"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,wind_direction_10m&timezone=auto"
@@ -573,7 +684,6 @@ if track_button:
                     except Exception as e:
                         st.warning(f"⚠️ Could not fetch weather data: {e}")
                     
-                    # Webcams
                     if windy_api_key.strip():
                         try:
                             with st.spinner("Searching for nearby webcams..."):
@@ -588,7 +698,7 @@ if track_button:
                                 if webcam_data.get('status') == 'OK' and 'result' in webcam_data:
                                     webcams = webcam_data['result'].get('webcams', [])
                                     if webcams:
-                                        for i, cam in enumerate(webcams[:5]):  # Limit to 5
+                                        for i, cam in enumerate(webcams[:5]):
                                             cam_data = {
                                                 'title': cam.get('title', f'Webcam {i+1}'),
                                                 'image_url': None,
@@ -618,7 +728,6 @@ if track_button:
                     else:
                         results['webcam_message'] = "💡 **Tip:** Provide a Windy API Key to view nearby webcams. Get one free at https://api.windy.com/keys"
                     
-                    # Store results in session state
                     st.session_state.tracking_results = results
                     st.session_state.last_tracked_ip = current_ip
                     st.session_state.show_results = True
@@ -634,7 +743,6 @@ if track_button:
             except Exception as e:
                 st.error(f"❌ Unexpected error: {e}")
         else:
-            # Using cached data
             st.session_state.show_results = True
             st.info("ℹ️ Showing cached results for this IP address.")
 
@@ -644,7 +752,12 @@ if st.session_state.show_results and st.session_state.tracking_results:
     st.subheader(f"📊 Results for IP: {st.session_state.tracking_results['ip_address']}")
     display_results(st.session_state.tracking_results)
 
-# Add footer
+# Add footer with dynamic date and time
 st.markdown("---")
+wat_tz = pytz.timezone('Africa/Lagos')
+current_time = datetime.now(wat_tz)
+formatted_time = current_time.strftime("%I:%M %p WAT on %A, %B %d, %Y")
+st.markdown(f"**Current Time:** {formatted_time}")
 st.markdown("**Note:** This tool shows approximate location based on IP geolocation. Accuracy may vary.")
 st.markdown("**Privacy:** No IP addresses or location data are stored by this application.")
+st.markdown("**Network Tests:** Latency and speed tests are approximate and depend on server availability.")
