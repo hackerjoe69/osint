@@ -64,58 +64,166 @@ def check_vpn_status(ip_address, geo_data):
         'is_vpn': False,
         'confidence': 'Low',
         'indicators': [],
-        'risk_score': 0
+        'risk_score': 0,
+        'debug_info': []
     }
     
     try:
-        # Check ISP/Organization names for VPN keywords
+        # Extract data for analysis
         isp = geo_data.get('isp', '').lower()
         org = geo_data.get('org', '').lower()
+        as_info = geo_data.get('as', '').lower()
+        country = geo_data.get('country', '').lower()
         
+        # Debug information
+        vpn_indicators['debug_info'].append(f"ISP: {isp}")
+        vpn_indicators['debug_info'].append(f"Organization: {org}")
+        vpn_indicators['debug_info'].append(f"AS: {as_info}")
+        
+        # Expanded VPN keywords
         vpn_keywords = [
-            'vpn', 'proxy', 'virtual private', 'hosting', 'datacenter', 
-            'cloud', 'server', 'tunnel', 'anonymous', 'privacy',
-            'expressvpn', 'nordvpn', 'surfshark', 'cyberghost',
-            'purevpn', 'hotspot shield', 'windscribe', 'protonvpn'
+            'vpn', 'proxy', 'virtual private', 'private network', 'tunnel', 'anonymous',
+            'privacy', 'secure', 'shield', 'guard', 'protect', 'hide', 'mask',
+            'expressvpn', 'nordvpn', 'surfshark', 'cyberghost', 'purevpn', 
+            'hotspot shield', 'windscribe', 'protonvpn', 'ipvanish', 'vyprvpn',
+            'privatevpn', 'hidemyass', 'tunnelbear', 'zenmate', 'avast secureline',
+            'kaspersky secure', 'mcafee safe', 'norton secure', 'bitdefender',
+            'fastestssh', 'ssh tunnel', 'openvpn', 'wireguard', 'strongvpn'
+        ]
+        
+        # Enhanced datacenter/hosting keywords
+        datacenter_keywords = [
+            'hosting', 'datacenter', 'data center', 'cloud', 'server', 'vps',
+            'dedicated', 'colocation', 'colo', 'infrastructure', 'services',
+            'amazon', 'google', 'microsoft', 'digitalocean', 'linode', 'vultr',
+            'ovh', 'hetzner', 'cloudflare', 'fastly', 'maxcdn', 'keycdn',
+            'contabo', 'scaleway', 'rackspace', 'godaddy', 'hostgator',
+            'bluehost', 'dreamhost', 'namecheap', 'hostinger'
         ]
         
         # Check for VPN keywords in ISP/Org
         for keyword in vpn_keywords:
-            if keyword in isp or keyword in org:
-                vpn_indicators['indicators'].append(f'VPN keyword "{keyword}" found in ISP/Organization')
+            if keyword in isp:
+                vpn_indicators['indicators'].append(f'VPN keyword "{keyword}" found in ISP: {geo_data.get("isp", "")}')
+                vpn_indicators['risk_score'] += 25
+            if keyword in org:
+                vpn_indicators['indicators'].append(f'VPN keyword "{keyword}" found in Organization: {geo_data.get("org", "")}')
+                vpn_indicators['risk_score'] += 25
+            if keyword in as_info:
+                vpn_indicators['indicators'].append(f'VPN keyword "{keyword}" found in AS: {geo_data.get("as", "")}')
                 vpn_indicators['risk_score'] += 20
         
-        # Check for data center/hosting providers
-        datacenter_keywords = ['amazon', 'google', 'microsoft', 'digitalocean', 'linode', 'vultr', 'ovh']
+        # Check for datacenter/hosting providers
+        hosting_score = 0
         for keyword in datacenter_keywords:
-            if keyword in isp or keyword in org:
-                vpn_indicators['indicators'].append(f'Data center provider "{keyword}" detected')
+            if keyword in isp:
+                vpn_indicators['indicators'].append(f'Hosting keyword "{keyword}" in ISP: {geo_data.get("isp", "")}')
+                hosting_score += 10
+            if keyword in org:
+                vpn_indicators['indicators'].append(f'Hosting keyword "{keyword}" in Organization: {geo_data.get("org", "")}')
+                hosting_score += 10
+            if keyword in as_info:
+                vpn_indicators['indicators'].append(f'Hosting keyword "{keyword}" in AS: {geo_data.get("as", "")}')
+                hosting_score += 8
+        
+        if hosting_score > 0:
+            vpn_indicators['risk_score'] += min(hosting_score, 30)  # Cap hosting score
+        
+        # Check ip-api specific fields
+        if geo_data.get('proxy', False):
+            vpn_indicators['indicators'].append('Proxy flag detected by ip-api.com')
+            vpn_indicators['risk_score'] += 40
+        
+        # Check for mobile carrier vs datacenter mismatch
+        mobile_keywords = ['mobile', 'cellular', 'wireless', 'telecom', 'communications']
+        is_mobile_isp = any(keyword in isp for keyword in mobile_keywords)
+        is_datacenter = any(keyword in isp for keyword in datacenter_keywords)
+        
+        if is_datacenter and not is_mobile_isp:
+            vpn_indicators['indicators'].append(f'Datacenter ISP detected: {geo_data.get("isp", "")}')
+            vpn_indicators['risk_score'] += 20
+        
+        # Multiple VPN detection APIs
+        vpn_apis = [
+            {
+                'name': 'VPNAPI.io',
+                'url': f"https://vpnapi.io/api/{ip_address}?key=free",
+                'parser': lambda data: {
+                    'vpn': data.get('security', {}).get('vpn', False),
+                    'proxy': data.get('security', {}).get('proxy', False),
+                    'tor': data.get('security', {}).get('tor', False)
+                }
+            },
+            {
+                'name': 'IP Quality Score (Free)',
+                'url': f"https://ipqualityscore.com/api/json/ip/demo/{ip_address}",
+                'parser': lambda data: {
+                    'vpn': data.get('vpn', False),
+                    'proxy': data.get('proxy', False),
+                    'tor': data.get('tor', False)
+                }
+            }
+        ]
+        
+        for api in vpn_apis:
+            try:
+                response = requests.get(api['url'], timeout=5)
+                if response.status_code == 200:
+                    data = response.json()
+                    parsed = api['parser'](data)
+                    
+                    if parsed.get('vpn'):
+                        vpn_indicators['indicators'].append(f'VPN detected by {api["name"]}')
+                        vpn_indicators['risk_score'] += 35
+                    
+                    if parsed.get('proxy'):
+                        vpn_indicators['indicators'].append(f'Proxy detected by {api["name"]}')
+                        vpn_indicators['risk_score'] += 30
+                    
+                    if parsed.get('tor'):
+                        vpn_indicators['indicators'].append(f'Tor network detected by {api["name"]}')
+                        vpn_indicators['risk_score'] += 40
+                        
+            except Exception as e:
+                vpn_indicators['debug_info'].append(f'{api["name"]} check failed: {str(e)}')
+        
+        # Additional heuristics for common VPN patterns
+        
+        # Check for sequential IP patterns (common in VPN pools)
+        ip_parts = ip_address.split('.')
+        try:
+            last_octet = int(ip_parts[3])
+            if last_octet in [1, 2, 3, 10, 50, 100]:  # Common VPN server IPs
+                vpn_indicators['indicators'].append(f'Common VPN server IP pattern detected')
+                vpn_indicators['risk_score'] += 5
+        except:
+            pass
+        
+        # Check for common VPN exit countries with suspicious ISPs
+        vpn_friendly_countries = [
+            'netherlands', 'switzerland', 'panama', 'romania', 'bulgaria',
+            'moldova', 'seychelles', 'british virgin islands', 'cayman islands'
+        ]
+        
+        if any(vpn_country in country for vpn_country in vpn_friendly_countries):
+            if any(word in isp for word in ['hosting', 'server', 'cloud', 'datacenter']):
+                vpn_indicators['indicators'].append(f'VPN-friendly country ({country}) with hosting ISP')
                 vpn_indicators['risk_score'] += 15
         
-        # Check ASN (Autonomous System) patterns
-        as_info = geo_data.get('as', '').lower()
-        if any(word in as_info for word in ['hosting', 'datacenter', 'cloud', 'server']):
-            vpn_indicators['indicators'].append('Hosting/Datacenter ASN detected')
-            vpn_indicators['risk_score'] += 10
+        # Port scan detection (advanced heuristic)
+        try:
+            # Check if IP has common VPN ports open (this is a simplified check)
+            common_vpn_ports = [1194, 443, 80, 53]  # OpenVPN, HTTPS, HTTP, DNS
+            # Note: Actual port scanning would require additional libraries
+            # This is a placeholder for more advanced detection
+        except:
+            pass
         
-        # Additional VPN detection using ip-api.com fields
-        if geo_data.get('proxy', False):
-            vpn_indicators['indicators'].append('Proxy flag set by geolocation service')
-            vpn_indicators['risk_score'] += 30
-        
-        # Check for unusual location vs ISP mismatches (basic heuristic)
-        country = geo_data.get('country', '').lower()
-        country_code = geo_data.get('countryCode', '').lower()
-        
-        # Common VPN exit countries
-        common_vpn_countries = ['netherlands', 'switzerland', 'panama', 'romania', 'bulgaria']
-        if any(vpn_country in country for vpn_country in common_vpn_countries):
-            if any(word in isp for word in ['vpn', 'proxy', 'privacy']):
-                vpn_indicators['indicators'].append(f'Common VPN exit country: {country}')
-                vpn_indicators['risk_score'] += 10
-        
-        # Determine overall assessment
-        if vpn_indicators['risk_score'] >= 50:
+        # Final risk assessment
+        if vpn_indicators['risk_score'] >= 70:
+            vpn_indicators['is_vpn'] = True
+            vpn_indicators['confidence'] = 'Very High'
+        elif vpn_indicators['risk_score'] >= 50:
             vpn_indicators['is_vpn'] = True
             vpn_indicators['confidence'] = 'High'
         elif vpn_indicators['risk_score'] >= 30:
@@ -125,41 +233,26 @@ def check_vpn_status(ip_address, geo_data):
             vpn_indicators['is_vpn'] = True
             vpn_indicators['confidence'] = 'Low'
         
-        # Additional check using a secondary API for VPN detection
-        try:
-            vpn_check_url = f"https://vpnapi.io/api/{ip_address}?key=free"
-            vpn_response = requests.get(vpn_check_url, timeout=5)
-            if vpn_response.status_code == 200:
-                vpn_data = vpn_response.json()
-                if vpn_data.get('security', {}).get('vpn', False):
-                    vpn_indicators['indicators'].append('VPN detected by secondary service')
-                    vpn_indicators['risk_score'] += 25
-                    vpn_indicators['is_vpn'] = True
-                    if vpn_indicators['confidence'] == 'Low':
-                        vpn_indicators['confidence'] = 'Medium'
-                
-                if vpn_data.get('security', {}).get('proxy', False):
-                    vpn_indicators['indicators'].append('Proxy detected by secondary service')
-                    vpn_indicators['risk_score'] += 20
-                    vpn_indicators['is_vpn'] = True
-                
-                if vpn_data.get('security', {}).get('tor', False):
-                    vpn_indicators['indicators'].append('Tor network detected')
-                    vpn_indicators['risk_score'] += 30
-                    vpn_indicators['is_vpn'] = True
-                    vpn_indicators['confidence'] = 'High'
-        except:
-            # Fallback VPN check failed, continue with existing analysis
-            pass
-        
-        # Re-evaluate confidence after secondary check
-        if vpn_indicators['risk_score'] >= 60:
-            vpn_indicators['confidence'] = 'Very High'
-        elif vpn_indicators['risk_score'] >= 45:
-            vpn_indicators['confidence'] = 'High'
+        # If no indicators found, try one more aggressive check
+        if vpn_indicators['risk_score'] == 0:
+            # Check for any ISP that's not a traditional telecom provider
+            traditional_telecoms = [
+                'comcast', 'verizon', 'at&t', 'charter', 'cox', 'spectrum',
+                'british telecom', 'bt', 'virgin media', 'sky', 'orange',
+                'vodafone', 'telefonica', 'deutsche telekom', 't-mobile',
+                'sprint', 'rogers', 'bell canada', 'telus', 'shaw'
+            ]
+            
+            is_traditional = any(telecom in isp for telecom in traditional_telecoms)
+            if not is_traditional and isp:
+                vpn_indicators['indicators'].append(f'Non-traditional ISP detected: {geo_data.get("isp", "")}')
+                vpn_indicators['risk_score'] += 10
+                vpn_indicators['is_vpn'] = True
+                vpn_indicators['confidence'] = 'Low'
         
     except Exception as e:
         vpn_indicators['indicators'].append(f'Error during VPN check: {str(e)}')
+        vpn_indicators['debug_info'].append(f'Exception: {str(e)}')
     
     return vpn_indicators
 
@@ -247,9 +340,17 @@ def display_results(results):
                 for indicator in vpn_info['indicators']:
                     st.write(f"• {indicator}")
             
+            # Show debug information for troubleshooting
+            if vpn_info.get('debug_info'):
+                with st.expander("🔧 Debug Information", expanded=False):
+                    for debug_item in vpn_info['debug_info']:
+                        st.write(f"• {debug_item}")
+            
             # Additional info
             if vpn_info['is_vpn']:
                 st.info("💡 **Note:** VPN/Proxy detection is based on various indicators and may not be 100% accurate.")
+            else:
+                st.info("💡 **Note:** If you're using a VPN and it's not detected, your VPN may be using residential IP addresses or advanced obfuscation techniques.")
         else:
             st.info("⚠️ VPN status check not available")
         
